@@ -1,0 +1,139 @@
+#!/bin/bash
+set -o errexit -o errtrace -o pipefail
+
+usage() {
+    echo "Usage: optician [OPTION...]
+Create an archive and burn it.
+
+Required:
+    -d      the directory to archive
+    -n      the name of the archive
+
+Optional:
+    -e      the key ID to encrypt the archive to
+    -l      the label of the disc image"
+}
+
+checkopts() {
+    if [ -z "$DIRECTORY" ]; then
+        echo "Target directory (-d) must be specified."
+        usage
+        exit 1
+    fi
+    if [ ! -r "$DIRECTORY" ]; then
+        echo "Target directory (-d) is not readable."
+        usage
+        exit 1
+    fi
+    if [ -z "$ARCHIVE_NAME" ]; then
+        echo "Archive name (-n) must be specified."
+        usage
+        exit 1
+    fi
+    if [ -n "$KEYID" ]; then
+        if ! gpg --list-keys "$KEYID" > /dev/null; then
+            echo "No key found for ID: $KEYID"
+            usage
+            exit 1
+        fi
+    fi
+    if [ -z "$ARCHIVE_LABEL" ]; then
+        ARCHIVE_LABEL="$ARCHIVE_NAME $(date +'%Y-%m-%d')"
+        echo "No archive label (-l) provided. Label will be: $ARCHIVE_LABEL"
+    fi
+}
+
+mktmp_dir() {
+    # Build a temporary directory to function as the sandbox home.
+    if [ -n "$XDG_RUNTIME_DIR" ]; then
+        OUTPUT_DIR=$XDG_RUNTIME_DIR/optician
+    else
+        OUTPUT_DIR=/tmp/$USER/optician
+    fi
+    mkdir -p "$OUTPUT_DIR"
+}
+
+archive() {
+    ARCHIVE_FILENAME="$ARCHIVE_NAME.tar"
+    echo "Archiving $DIRECTORY to $OUTPUT_DIR/$ARCHIVE_FILENAME"
+    tar --directory "$DIRECTORY" --create --file "$OUTPUT_DIR"/"$ARCHIVE_FILENAME" .
+}
+
+encrypt() {
+    echo "Encrypting archive to key: $KEYID"
+    gpg --encrypt --recipient "$KEYID" --output "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"{.gpg,}
+    rm "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"
+    ARCHIVE_FILENAME="$ARCHIVE_FILENAME".gpg
+}
+
+integrity() {
+    echo "Creating integrity files."
+    # Sign the archive.
+    gpg --detach-sign --output "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"{.sig,}
+    # Create recovery blocks with 30% redundancy.
+    par2create -r30 -m8000 "$OUTPUT_DIR/$ARCHIVE_NAME.par2" "$OUTPUT_DIR"/*
+    # Hash all files.
+    cd "$OUTPUT_DIR"
+    hashdeep -b ./* > hashes
+}
+
+burn() {
+    echo "Creating image."
+    # Create a disc image of all files.
+    mkisofs -iso-level 3 -V "$ARCHIVE_LABEL" -r -o "$OUTPUT_DIR/$ARCHIVE_NAME.iso" "$OUTPUT_DIR"/*
+    # Burn the image to disc. 
+    read -p "Image created. Ready to burn? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "Writing image to disc."
+        cdrecord -v dev=/dev/sr0 "$OUTPUT_DIR/$ARCHIVE_NAME.iso"
+    else
+        echo "Fine then."
+    fi
+}
+
+cleanup() {
+    read -p "Clean up temporary files? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cleaning up"
+        rm -r "$OUTPUT_DIR"
+    else
+        echo "OK. Clean it up yourself."
+    fi
+}
+
+while getopts "n:l:d:e:h" opt; do
+    case $opt in
+        n)
+            ARCHIVE_NAME=$OPTARG
+            ;;
+        l)
+            ARCHIVE_LABEL=$OPTARG
+            ;;
+        d)
+            DIRECTORY=$OPTARG
+            ;;
+        e)
+            KEYID=$OPTARG
+            ;;
+        h)
+            usage
+            exit
+            ;;
+        *)
+            usage
+            exit
+            ;;
+    esac
+done
+
+checkopts
+mktmp_dir
+archive
+if [ -n "$KEYID" ]; then
+    encrypt
+fi
+integrity
+burn
+cleanup
