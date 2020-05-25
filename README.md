@@ -24,6 +24,7 @@ annually).
 
     Optional:
         -e      the key ID to encrypt the archive to
+        -c      encrypt the archive with a symmetric passphrase
         -l      the label of the disc image"
 
 ## Process

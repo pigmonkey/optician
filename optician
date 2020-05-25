@@ -11,6 +11,7 @@ Required:
 
 Optional:
     -e      the key ID to encrypt the archive to
+    -c      encrypt the archive with a symmetric passphrase
     -l      the label of the disc image"
 }
 
@@ -37,6 +38,11 @@ checkopts() {
             exit 1
         fi
     fi
+    if [ -n "$SYMMETRIC" ] && [ -n "$KEYID" ]; then
+        echo "The -e and -c options may not be specified together."
+        usage
+        exit 1
+    fi
     if [ -z "$ARCHIVE_LABEL" ]; then
         ARCHIVE_LABEL="$ARCHIVE_NAME $(date +'%Y-%m-%d')"
         echo "No archive label (-l) provided. Label will be: $ARCHIVE_LABEL"
@@ -62,6 +68,13 @@ archive() {
 encrypt() {
     echo "Encrypting archive to key: $KEYID"
     gpg --encrypt --recipient "$KEYID" --output "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"{.gpg,}
+    rm "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"
+    ARCHIVE_FILENAME="$ARCHIVE_FILENAME".gpg
+}
+
+encrypt_symmetric() {
+    echo "Preparing to symmetrically encrypt archive."
+    gpg --encrypt --symmetric --output "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"{.gpg,}
     rm "$OUTPUT_DIR"/"$ARCHIVE_FILENAME"
     ARCHIVE_FILENAME="$ARCHIVE_FILENAME".gpg
 }
@@ -103,7 +116,7 @@ cleanup() {
     fi
 }
 
-while getopts "n:l:d:e:h" opt; do
+while getopts "n:l:d:e:hc" opt; do
     case $opt in
         n)
             ARCHIVE_NAME=$OPTARG
@@ -116,6 +129,9 @@ while getopts "n:l:d:e:h" opt; do
             ;;
         e)
             KEYID=$OPTARG
+            ;;
+        c)
+            SYMMETRIC=True
             ;;
         h)
             usage
@@ -133,6 +149,9 @@ mktmp_dir
 archive
 if [ -n "$KEYID" ]; then
     encrypt
+fi
+if [ -n "$SYMMETRIC" ]; then
+    encrypt_symmetric
 fi
 integrity
 burn
